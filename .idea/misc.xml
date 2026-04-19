@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="Black">
+    <option name="sdkName" value="Python 3.11 (基于Transformer的文本情感分析系统设计与实现)" />
+  </component>
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.11 (基于Transformer的文本情感分析系统设计与实现)" project-jdk-type="Python SDK" />
+</project>

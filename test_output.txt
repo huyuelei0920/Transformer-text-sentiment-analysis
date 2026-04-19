@@ -1,0 +1,36 @@
+正在初始化预测器...
+开始初始化预测器...
+使用设备: cuda
+加载配置...
+使用训练时的配置
+配置: {'d_model': 256, 'num_heads': 4, 'num_layers': 2, 'd_ff': 512, 'dropout': 0.2, 'max_length': 128}
+加载分词器...
+分词器已从 transformer_checkpoints\tokenizer.pkl 加载
+分词器词汇表大小: 241
+加载模型...
+使用的模型配置: {'d_model': 256, 'num_heads': 4, 'num_layers': 2, 'd_ff': 512, 'dropout': 0.2, 'max_len': 128, 'pad_idx': 0}
+模型已从 transformer_checkpoints\best_model.pt 加载
+模型验证准确率: 1.0000
+预测器已初始化，使用设备: cuda
+预测器初始化成功！
+
+测试正面情感:
+输入: 你真好
+预测结果: {'text': '你真好', 'label': 1, 'label_name': '正面', 'label_name_en': 'Positive', 'emoji': '😊', 'confidence': 0.946946382522583, 'confidence_percent': '94.69%', 'all_scores': {'负面': 0.04989239573478699, '正面': 0.946946382522583, '中性': 0.0031612247694283724}, 'all_scores_percent': {'负面': '4.99%', '正面': '94.69%', '中性': '0.32%'}}
+
+测试其他情感:
+输入: 今天天气真好，心情很愉快
+预测结果: {'text': '今天天气真好，心情很愉快', 'label': 1, 'label_name': '正面', 'label_name_en': 'Positive', 'emoji': '😊', 'confidence': 0.9778510928153992, 'confidence_percent': '97.79%', 'all_scores': {'负面': 0.018474439159035683, '正面': 0.9778510928153992, '中性': 0.003674495965242386}, 'all_scores_percent': {'负面': '1.85%', '正面': '97.79%', '中性': '0.37%'}}
+
+输入: 这个产品质量太差了，我很失望
+预测结果: {'text': '这个产品质量太差了，我很失望', 'label': 0, 'label_name': '负面', 'label_name_en': 'Negative', 'emoji': '😞', 'confidence': 0.9846632480621338, 'confidence_percent': '98.47%', 'all_scores': {'负面': 0.9846632480621338, '正面': 0.009808767586946487, '中性': 0.005527970846742392}, 'all_scores_percent': {'负面': '98.47%', '正面': '0.98%', '中性': '0.55%'}}
+
+输入: 这个产品还可以，没什么特别的
+预测结果: {'text': '这个产品还可以，没什么特别的', 'label': 2, 'label_name': '中性', 'label_name_en': 'Neutral', 'emoji': '😐', 'confidence': 0.5329771041870117, 'confidence_percent': '53.30%', 'all_scores': {'负面': 0.16481930017471313, '正面': 0.30220356583595276, '中性': 0.5329771041870117}, 'all_scores_percent': {'负面': '16.48%', '正面': '30.22%', '中性': '53.30%'}}
+
+输入: 太棒了，终于完成了这个项目！
+预测结果: {'text': '太棒了，终于完成了这个项目！', 'label': 0, 'label_name': '负面', 'label_name_en': 'Negative', 'emoji': '😞', 'confidence': 0.7966272830963135, 'confidence_percent': '79.66%', 'all_scores': {'负面': 0.7966272830963135, '正面': 0.1790439933538437, '中性': 0.024328693747520447}, 'all_scores_percent': {'负面': '79.66%', '正面': '17.90%', '中性': '2.43%'}}
+
+输入: 真的很无语，不知道该说什么
+预测结果: {'text': '真的很无语，不知道该说什么', 'label': 1, 'label_name': '正面', 'label_name_en': 'Positive', 'emoji': '😊', 'confidence': 0.4881860315799713, 'confidence_percent': '48.82%', 'all_scores': {'负面': 0.45305755734443665, '正面': 0.4881860315799713, '中性': 0.058756470680236816}, 'all_scores_percent': {'负面': '45.31%', '正面': '48.82%', '中性': '5.88%'}}
+
