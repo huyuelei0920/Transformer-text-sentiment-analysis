@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 基于Transformer的文本情感分析系统设计与实现
 
 ## 项目简介
@@ -144,3 +145,7 @@ MIT License
 ## 致谢
 
 - Transformer架构参考: "Attention Is All You Need" (Vaswani et al., 2017)
+=======
+# Transformer-text-sentiment-analysis
+Design and implementation of a Transformer-based text sentiment analysis system for my thesis project
+>>>>>>> 4eddb2608b927bc8ebfba192c0c0726e427aa013
