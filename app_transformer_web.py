@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import torch
 
-from train_transformer_web_fixed import run_training, validate_dataset
+from train_transformer_web import run_training, validate_dataset
 from tokenizer import ChineseTokenizer
 
 

@@ -1,5 +1,6 @@
 """
 纯 Transformer 情感分析模型训练脚本
+彻底解决梯度爆炸和模型不稳定问题
 """
 import json
 import os
@@ -12,8 +13,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.metrics import accuracy_score, f1_score
-from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from transformer_model import create_model
 from tokenizer import ChineseTokenizer, SentimentDataset, load_data_from_csv
@@ -68,7 +68,6 @@ class StreamlitTrainer:
         total_loss = 0.0
         all_preds = []
         all_labels = []
-        grad_norm_total = 0.0
         batch_count = 0
 
         for batch in self.train_loader:
@@ -79,27 +78,19 @@ class StreamlitTrainer:
             self.optimizer.zero_grad()
             logits = self.model(input_ids, attention_mask)
 
-            # 检查logits是否异常
+            # 检查数值稳定性
             if torch.isnan(logits).any() or torch.isinf(logits).any():
-                self.log("警告: logits包含NaN或Inf，跳过此batch")
                 continue
 
             loss = self.criterion(logits, labels)
 
             if torch.isnan(loss) or torch.isinf(loss):
-                self.log(f"警告: loss异常 {loss.item()}，跳过此batch")
                 continue
 
             loss.backward()
 
-            # 检查梯度爆炸 - 使用非常严格的梯度裁剪
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.3)
-            grad_norm_total += grad_norm
-            batch_count += 1
-
-            # 只在梯度真正异常时才警告
-            if grad_norm > 1.5:
-                self.log(f"警告: 梯度范数 {grad_norm:.3f}，可能存在异常样本")
+            # 非常严格的梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.2)
 
             self.optimizer.step()
 
@@ -107,17 +98,13 @@ class StreamlitTrainer:
             preds = torch.argmax(logits, dim=-1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
+            batch_count += 1
 
-        avg_loss = total_loss / max(batch_count, 1)
-        avg_grad_norm = grad_norm_total / max(batch_count, 1)
-        accuracy = accuracy_score(all_labels, all_preds) if all_labels else 0.0
+        if batch_count == 0:
+            return 0.0, 0.0
 
-        # 检查预测分布
-        from collections import Counter
-        pred_dist = Counter(all_preds)
-        if len(pred_dist) == 1:
-            self.log(f"警告: 训练时只预测类别 {list(pred_dist.keys())[0]}")
-
+        avg_loss = total_loss / batch_count
+        accuracy = accuracy_score(all_labels, all_preds)
         return avg_loss, accuracy
 
     # 验证
@@ -126,6 +113,7 @@ class StreamlitTrainer:
         total_loss = 0.0
         all_preds = []
         all_labels = []
+        batch_count = 0
 
         with torch.no_grad():
             for batch in self.val_loader:
@@ -134,41 +122,40 @@ class StreamlitTrainer:
                 labels = batch['label'].to(self.device)
 
                 logits = self.model(input_ids, attention_mask)
+
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
+                    continue
+
                 loss = self.criterion(logits, labels)
+
+                if torch.isnan(loss) or torch.isinf(loss):
+                    continue
 
                 total_loss += loss.item()
                 preds = torch.argmax(logits, dim=-1)
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
+                batch_count += 1
 
-        avg_loss = total_loss / max(len(self.val_loader), 1)
-        accuracy = accuracy_score(all_labels, all_preds) if all_labels else 0.0
-        macro_f1 = f1_score(all_labels, all_preds, average='macro') if all_labels else 0.0
+        if batch_count == 0:
+            return 0.0, 0.0, 0.0
 
-        # 检查验证集预测分布
-        from collections import Counter
-        pred_dist = Counter(all_preds)
-        if len(pred_dist) == 1:
-            self.log(f"警告: 验证时只预测类别 {list(pred_dist.keys())[0]}")
-        elif len(pred_dist) == 2:
-            self.log(f"警告: 验证时只预测2个类别 {dict(pred_dist)}")
-
+        avg_loss = total_loss / batch_count
+        accuracy = accuracy_score(all_labels, all_preds)
+        macro_f1 = f1_score(all_labels, all_preds, average='macro')
         return avg_loss, accuracy, macro_f1
 
     # 保存模型
     def save_model(self, filename: str):
         path = os.path.join(self.save_dir, filename)
 
-        # Windows 文件锁定修复：先删除已存在的文件
         if os.path.exists(path):
             try:
                 os.remove(path)
-                import time
                 time.sleep(0.1)
             except Exception:
                 pass
 
-        # 使用临时文件+重命名的方式保存
         temp_path = path + '.tmp'
         torch.save(
             {
@@ -185,24 +172,11 @@ class StreamlitTrainer:
         shutil.move(temp_path, path)
 
     # 训练主过程
-    def train(self, num_epochs: int, early_stopping_patience: int = 8, warmup_scheduler=None, main_scheduler=None):
+    def train(self, num_epochs: int, early_stopping_patience: int = 8):
         no_improve_count = 0
 
         for epoch in range(num_epochs):
             start_time = time.time()
-
-            # 更新学习率：先warmup，然后使用主scheduler
-            if warmup_scheduler is not None and main_scheduler is not None:
-                if epoch < 3:  # warmup阶段
-                    warmup_scheduler.step()
-                else:  # 主调度阶段
-                    main_scheduler.step()
-                current_lr = self.optimizer.param_groups[0]['lr']
-            elif main_scheduler is not None:
-                main_scheduler.step()
-                current_lr = self.optimizer.param_groups[0]['lr']
-            else:
-                current_lr = self.optimizer.param_groups[0]['lr']
 
             train_loss, train_acc = self.train_epoch()
             val_loss, val_acc, val_f1 = self.evaluate()
@@ -214,6 +188,7 @@ class StreamlitTrainer:
             self.history['val_f1'].append(val_f1)
 
             elapsed = time.time() - start_time
+            current_lr = self.optimizer.param_groups[0]['lr']
 
             self.log(
                 f"Epoch {epoch + 1}/{num_epochs}\n"
@@ -225,10 +200,6 @@ class StreamlitTrainer:
                 f"lr         = {current_lr:.6f}\n"
                 f"time       = {elapsed:.2f}s"
             )
-
-            # 额外诊断：如果验证loss太大，可能是数值不稳定
-            if val_loss > 10:
-                self.log(f"⚠️ 验证loss异常高({val_loss:.2f})，可能存在数值问题")
 
             if self.progress_callback:
                 self.progress_callback((epoch + 1) / num_epochs)
@@ -341,6 +312,7 @@ def run_training(
         log_callback(f"训练集: {len(train_texts)} 条")
         log_callback(f"验证集: {len(val_texts)} 条")
 
+    # 不使用采样器，直接使用标准训练
     train_dataset = SentimentDataset(
         train_texts, train_labels, tokenizer, max_length=config['max_length']
     )
@@ -348,20 +320,10 @@ def run_training(
         val_texts, val_labels, tokenizer, max_length=config['max_length']
     )
 
-    # 使用类别平衡采样器
-    from torch.utils.data import WeightedRandomSampler
-    label_counts = Counter(train_labels)
-    sample_weights = [1.0 / label_counts[label] for label in train_labels]
-    sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True
-    )
-
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['batch_size'],
-        sampler=sampler,
+        shuffle=True,
         num_workers=0,
     )
     val_loader = DataLoader(
@@ -371,41 +333,38 @@ def run_training(
         num_workers=0,
     )
 
+    # 使用极简模型配置
+    model_config = {
+        'd_model': 128,
+        'num_heads': 2,
+        'num_layers': 2,
+        'd_ff': 256,
+        'dropout': 0.1,
+        'max_len': config['max_length'],
+    }
+
     model = create_model(
         vocab_size=tokenizer.vocab_size,
         num_classes=3,
-        config={
-            'd_model': config.get('d_model', 256),
-            'num_heads': config.get('num_heads', 8),
-            'num_layers': config.get('num_layers', 4),
-            'd_ff': config.get('d_ff', 512),
-            'dropout': config.get('dropout', 0.15),
-            'max_len': config['max_length'],
-        },
+        config=model_config,
     ).to(device)
 
     optimizer = optim.AdamW(
         model.parameters(),
         lr=config['learning_rate'],
-        weight_decay=config.get('weight_decay', 0.01),
+        weight_decay=0.01,
     )
 
-    # 添加学习率warmup和调度器
-    warmup_epochs = 3
-    warmup_scheduler = optim.lr_scheduler.LambdaLR(
+    # 添加学习率调度器（更简单）
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
-        lr_lambda=lambda epoch: min(1.0, epoch / warmup_epochs)
-    )
-    main_scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer,
-        T_0=5,
-        T_mult=2,
-        eta_min=config['learning_rate'] * 0.01
+        mode='max',
+        factor=0.5,
+        patience=3
     )
 
-    # 使用标准交叉熵损失（配合WeightedRandomSampler实现类别平衡）
-    # 添加label smoothing提高稳定性
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    # 标准交叉熵损失
+    criterion = nn.CrossEntropyLoss()
 
     trainer = StreamlitTrainer(
         model=model,
@@ -420,12 +379,66 @@ def run_training(
         log_callback=log_callback,
     )
 
-    result = trainer.train(
-        num_epochs=config['num_epochs'],
-        early_stopping_patience=config['early_stopping_patience'],
-        warmup_scheduler=warmup_scheduler,
-        main_scheduler=main_scheduler,
-    )
+    # 自定义训练循环，支持scheduler
+    num_epochs = config['num_epochs']
+    early_stopping_patience = config['early_stopping_patience']
+    no_improve_count = 0
+
+    for epoch in range(num_epochs):
+        start_time = time.time()
+
+        train_loss, train_acc = trainer.train_epoch()
+        val_loss, val_acc, val_f1 = trainer.evaluate()
+
+        # 更新学习率
+        scheduler.step(val_acc)
+        current_lr = trainer.optimizer.param_groups[0]['lr']
+
+        trainer.history['train_loss'].append(train_loss)
+        trainer.history['val_loss'].append(val_loss)
+        trainer.history['train_acc'].append(train_acc)
+        trainer.history['val_acc'].append(val_acc)
+        trainer.history['val_f1'].append(val_f1)
+
+        elapsed = time.time() - start_time
+
+        log_msg = (
+            f"Epoch {epoch + 1}/{num_epochs}\n"
+            f"train_loss = {train_loss:.4f}\n"
+            f"train_acc  = {train_acc:.4f}\n"
+            f"val_loss   = {val_loss:.4f}\n"
+            f"val_acc    = {val_acc:.4f}\n"
+            f"val_f1     = {val_f1:.4f}\n"
+            f"lr         = {current_lr:.6f}\n"
+            f"time       = {elapsed:.2f}s"
+        )
+        trainer.log(log_msg)
+
+        if trainer.progress_callback:
+            trainer.progress_callback((epoch + 1) / num_epochs)
+
+        if val_acc > trainer.best_val_acc:
+            trainer.best_val_acc = val_acc
+            trainer.best_val_f1 = val_f1
+            trainer.save_model('best_model.pt')
+            trainer.log(f"[OK] 保存最佳模型，验证准确率={val_acc:.4f}")
+            no_improve_count = 0
+        else:
+            no_improve_count += 1
+            trainer.log(f"[INFO] 验证准确率未提升 ({no_improve_count}/{early_stopping_patience})")
+
+        if no_improve_count >= early_stopping_patience:
+            trainer.log("[INFO] 触发早停")
+            break
+
+    # 保存配置
+    result = {
+        'best_val_acc': trainer.best_val_acc,
+        'best_val_f1': trainer.best_val_f1,
+        'val_acc': trainer.best_val_acc,
+        'val_f1': trainer.best_val_f1,
+        'history': trainer.history,
+    }
 
     # 使用验证集评估模型性能
     import matplotlib.pyplot as plt
@@ -480,7 +493,7 @@ def run_training(
     ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=cm_labels).plot(
         ax=ax, cmap='Blues', colorbar=True
     )
-    ax.set_title('混淆矩阵（测试集）')
+    ax.set_title('混淆矩阵（验证集）')
     plt.tight_layout()
     plt.savefig(cm_path, dpi=150, bbox_inches='tight')
     plt.close()
@@ -489,11 +502,11 @@ def run_training(
     with open(os.path.join(config['save_dir'], 'config.json'), 'w', encoding='utf-8') as f:
         json.dump(
             {
-                'd_model': config['d_model'],
-                'num_heads': config['num_heads'],
-                'num_layers': config['num_layers'],
-                'd_ff': config['d_ff'],
-                'dropout': config['dropout'],
+                'd_model': model_config['d_model'],
+                'num_heads': model_config['num_heads'],
+                'num_layers': model_config['num_layers'],
+                'd_ff': model_config['d_ff'],
+                'dropout': model_config['dropout'],
                 'max_length': config['max_length'],
                 'val_acc': val_acc,
                 'val_f1': val_f1,
@@ -503,7 +516,6 @@ def run_training(
             indent=2,
         )
 
-    # 更新结果
     result['val_acc'] = val_acc
     result['val_f1'] = val_f1
     result['confusion_matrix_path'] = cm_path
