@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import torch
 
-from train_transformer_web import run_training, validate_dataset
+from train_transformer_web_fixed import run_training, validate_dataset
 from tokenizer import ChineseTokenizer
 
 
@@ -322,11 +322,19 @@ def section_title(title):
     st.markdown(f'<div class="card"><h3>{title}</h3></div>', unsafe_allow_html=True)
 
 
+@st.cache_data
+@st.cache_data
 def discover_csv_files(search_dir='.'):
     csv_files = []
     for path in Path(search_dir).glob('*.csv'):
         csv_files.append(str(path))
     return sorted(csv_files)
+
+
+@st.cache_data
+def load_csv_data(file_path):
+    """缓存的CSV数据加载"""
+    return pd.read_csv(file_path)
 
 
 def clean_text_preview(text):
@@ -338,6 +346,7 @@ def clean_text_preview(text):
     return text
 
 
+@st.cache_data
 def build_preprocess_preview(df, text_column, label_column, use_word=False, max_vocab_size=30000, min_freq=2):
     texts_raw = df[text_column].astype(str).tolist()
     labels = df[label_column].tolist()
@@ -386,6 +395,7 @@ def build_preprocess_preview(df, text_column, label_column, use_word=False, max_
     return stats
 
 
+@st.cache_data
 def plot_label_distribution(label_counter):
     labels = list(label_counter.keys())
     counts = list(label_counter.values())
@@ -427,6 +437,7 @@ def plot_label_distribution(label_counter):
     return fig
 
 
+@st.cache_data
 def plot_length_distribution(lengths):
     fig = go.Figure(data=[
         go.Histogram(
@@ -469,6 +480,7 @@ def analyze_text(model, text, return_attention=False):
 
 
 # 注意力可视化函数
+@st.cache_data
 def plot_attention_heatmap(tokens, attention_weights, layer_idx=0):
     import numpy as np
 
@@ -719,6 +731,7 @@ def plot_multi_layer_attention(tokens, attention_weights):
     return fig
 
 
+@st.cache_data
 def plot_training_history(history):
     if not history or len(history.get('train_loss', [])) == 0:
         return None
@@ -1310,29 +1323,55 @@ with tab_train:
     section_title('📁 数据集选择')
 
     dataset_mode = st.radio('选择数据来源', ['本地 CSV', '上传 CSV'], horizontal=True)
-    selected_path = None
-    preview_df = None
 
+    train_path = None
+    train_df = None
+    val_path = None
+    val_df = None
+
+    # 训练集选择
+    section_title('📄 训练集')
     if dataset_mode == '本地 CSV':
         csv_files = discover_csv_files('.')
         if csv_files:
-            # 默认选择 data.csv 文件
             default_index = 0
-            if 'data_augmented.csv' in csv_files:
-                default_index = csv_files.index('data_augmented.csv')
+            if 'train.csv' in csv_files:
+                default_index = csv_files.index('train.csv')
             elif 'data.csv' in csv_files:
                 default_index = csv_files.index('data.csv')
-            selected_path = st.selectbox('选择本地数据集', csv_files, index=default_index)
-            preview_df = pd.read_csv(selected_path)
+            train_path = st.selectbox('选择训练集', csv_files, index=default_index)
+            train_df = load_csv_data(train_path)
         else:
             st.warning('当前目录下没有找到 CSV 文件。')
     else:
-        uploaded_file = st.file_uploader('上传训练数据集', type=['csv'])
-        if uploaded_file is not None:
-            preview_df = pd.read_csv(uploaded_file)
+        uploaded_train = st.file_uploader('上传训练集', type=['csv'], key='train_upload')
+        if uploaded_train is not None:
+            train_df = pd.read_csv(uploaded_train)
             os.makedirs('uploaded_datasets', exist_ok=True)
-            selected_path = os.path.join('uploaded_datasets', uploaded_file.name)
-            preview_df.to_csv(selected_path, index=False, encoding='utf-8-sig')
+            train_path = os.path.join('uploaded_datasets', uploaded_train.name)
+            train_df.to_csv(train_path, index=False, encoding='utf-8-sig')
+
+    # 验证集选择
+    section_title('📋 验证集')
+    if dataset_mode == '本地 CSV':
+        if csv_files:
+            default_val_index = 0
+            if 'validation.csv' in csv_files:
+                default_val_index = csv_files.index('validation.csv')
+            elif 'val.csv' in csv_files:
+                default_val_index = csv_files.index('val.csv')
+            val_path = st.selectbox('选择验证集', csv_files, index=default_val_index)
+            val_df = load_csv_data(val_path)
+    else:
+        uploaded_val = st.file_uploader('上传验证集', type=['csv'], key='val_upload')
+        if uploaded_val is not None:
+            val_df = pd.read_csv(uploaded_val)
+            os.makedirs('uploaded_datasets', exist_ok=True)
+            val_path = os.path.join('uploaded_datasets', uploaded_val.name)
+            val_df.to_csv(val_path, index=False, encoding='utf-8-sig')
+
+    # 数据预览（显示训练集）
+    preview_df = train_df
 
     st.markdown('<div class="small-gap"></div>', unsafe_allow_html=True)
 
@@ -1461,17 +1500,16 @@ with tab_train:
         c1, c2 = st.columns(2)
 
         with c1:
-            batch_size = st.number_input('Batch Size', min_value=4, max_value=256, value=32, step=4)
+            batch_size = st.number_input('Batch Size', min_value=4, max_value=256, value=16, step=4)
             num_epochs = st.number_input('训练轮数', min_value=1, max_value=200, value=30, step=1)
             learning_rate = st.number_input(
                 '学习率',
                 min_value=0.000001,
                 max_value=0.01,
-                value=0.0003,
+                value=0.0001,
                 format='%.6f',
-                help='推荐值：1e-4 到 5e-4 之间',
+                help='推荐值：5e-5 到 2e-4 之间，梯度爆炸时建议降低学习率',
             )
-            test_size = st.slider('测试集比例', 0.1, 0.4, 0.2, 0.05)
             early_stopping_patience = st.number_input(
                 '早停耐心值',
                 min_value=1,
@@ -1494,7 +1532,16 @@ with tab_train:
 
         if start_train:
             try:
-                validate_dataset(preview_df, text_column, label_column)
+                # 检查是否选择了训练集和验证集
+                if train_path is None:
+                    st.error('请选择训练集')
+                    st.stop()
+                if val_path is None:
+                    st.error('请选择验证集')
+                    st.stop()
+
+                validate_dataset(train_df, text_column, label_column)
+                validate_dataset(val_df, text_column, label_column)
 
                 progress_bar = st.progress(0)
                 log_placeholder = st.empty()
@@ -1514,26 +1561,25 @@ with tab_train:
 
                 with st.spinner('训练中，请耐心等待...'):
                     config = {
-                        'data_path': selected_path,
+                        'train_data_path': train_path,
+                        'val_data_path': val_path,
                         'text_column': text_column,
                         'label_column': label_column,
-                        'd_model': 384,
-                        'num_heads': 8,
-                        'num_layers': 6,
-                        'd_ff': 1024,
-                        'dropout': 0.15,
+                        'd_model': 128,
+                        'num_heads': 2,
+                        'num_layers': 2,
+                        'd_ff': 256,
+                        'dropout': 0.1,
                         'max_length': int(max_length),
                         'batch_size': int(batch_size),
                         'num_epochs': int(num_epochs),
                         'learning_rate': float(learning_rate),
                         'weight_decay': 0.01,
-                        'label_smoothing': 0.05,
+                        'label_smoothing': 0.1,
                         'early_stopping_patience': int(early_stopping_patience),
                         'max_vocab_size': int(max_vocab_size),
                         'min_freq': int(min_freq),
                         'use_word': bool(use_word),
-                        'test_size': float(test_size),
-                        'random_state': 42,
                         'save_dir': save_dir,
                     }
                     result = run_training(
@@ -1546,23 +1592,23 @@ with tab_train:
 
                 st.markdown('<div class="small-gap"></div>', unsafe_allow_html=True)
 
-                # 显示测试集评估结果
-                if 'test_acc' in result and 'test_f1' in result:
+                # 显示验证集评估结果
+                if 'val_acc' in result and 'val_f1' in result:
                     st.markdown("""
                     <div class="card">
-                        <h3>📊 测试集评估结果</h3>
+                        <h3>📊 验证集评估结果</h3>
                     </div>
                     """, unsafe_allow_html=True)
 
                     col_test1, col_test2 = st.columns(2)
                     with col_test1:
-                        st.metric("测试集准确率", f"{result['test_acc']:.4f}")
+                        st.metric("验证集准确率", f"{result['val_acc']:.4f}")
                     with col_test2:
-                        st.metric("测试集F1分数", f"{result['test_f1']:.4f}")
+                        st.metric("验证集F1分数", f"{result['val_f1']:.4f}")
 
                     cm_path = result.get('confusion_matrix_path')
                     if cm_path and os.path.isfile(cm_path):
-                        st.markdown("**混淆矩阵（测试集）**")
+                        st.markdown("**混淆矩阵（验证集）**")
                         st.image(cm_path, use_container_width=True)
 
                 st.markdown('<div class="small-gap"></div>', unsafe_allow_html=True)

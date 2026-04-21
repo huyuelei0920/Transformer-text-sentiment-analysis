@@ -117,31 +117,50 @@ class SentimentPredictor:
             'max_len': max_len,
             'pad_idx': 0,
         }
-        
+
         print(f"使用的模型配置: {model_config}")
-        
+
+        # 加载权重
+        model_path = os.path.join(self.model_dir, self.model_file)
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"模型文件未找到: {model_path}")
+
+        checkpoint = torch.load(model_path, map_location=self.device)
+
+        # 优先使用checkpoint中的vocab_size
+        vocab_size = checkpoint.get('vocab_size', self.tokenizer.vocab_size)
+        print(f"使用vocab_size: {vocab_size} (来源: {'checkpoint' if 'vocab_size' in checkpoint else 'tokenizer'})")
+
         model = create_model(
-            vocab_size=self.tokenizer.vocab_size,
+            vocab_size=vocab_size,
             num_classes=3,
             config=model_config
         )
-        
-        # 加载权重
-        model_path = os.path.join(self.model_dir, self.model_file)
-        
-        if os.path.exists(model_path):
-            checkpoint = torch.load(model_path, map_location=self.device)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            print(f"模型已从 {model_path} 加载")
-            
-            if 'best_val_acc' in checkpoint:
-                print(f"模型验证准确率: {checkpoint['best_val_acc']:.4f}")
+
+        # 兼容性处理：旧模型没有pool_norm参数
+        model_state = checkpoint['model_state_dict']
+        model_state_keys = set(model_state.keys())
+        model_keys = set(model.state_dict().keys())
+
+        # 检查是否缺少pool_norm参数
+        missing_keys = model_keys - model_state_keys
+        if missing_keys:
+            print(f"检测到旧模型，缺少参数: {[k for k in missing_keys if 'pool_norm' in k]}")
+            # 过滤掉pool_norm相关的键
+            filtered_state = {k: v for k, v in model_state.items() if 'pool_norm' not in k}
+            model.load_state_dict(filtered_state, strict=False)
+            print(f"模型已从 {model_path} 加载（兼容模式，自动初始化缺失参数）")
         else:
-            raise FileNotFoundError(f"模型文件未找到: {model_path}")
-        
+            model.load_state_dict(model_state)
+            print(f"模型已从 {model_path} 加载")
+
+        if 'best_val_acc' in checkpoint:
+            print(f"模型验证准确率: {checkpoint['best_val_acc']:.4f}")
+
         model = model.to(self.device)
         model.eval()
-        
+
         return model
     
     def predict(self, text: str, return_all_scores: bool = True, return_attention: bool = False) -> Dict:

@@ -1,8 +1,0 @@
-开始执行预测脚本...
-
-错误: 'dict' object has no attribute 'vocab_size'
-Traceback (most recent call last):
-  File "D:\pythoncode\基于Transformer的文本情感分析系统设计与实现\simple_predict.py", line 23, in <module>
-    f.write(f"分词器加载成功，词汇表大小: {tokenizer.vocab_size}\n")
-                                           ^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'dict' object has no attribute 'vocab_size'

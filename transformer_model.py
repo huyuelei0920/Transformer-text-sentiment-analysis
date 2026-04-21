@@ -236,29 +236,40 @@ class SentimentTransformer(nn.Module):
         
         # Transformer 编码器
         self.encoder = TransformerEncoder(num_layers, d_model, num_heads, d_ff, dropout)
-        
-        # 分类头
+
+        # 池化后的LayerNorm，稳定分类器输入
+        self.pool_norm = nn.LayerNorm(d_model)
+
+        # 分类头 - 更稳定的结构
         self.classifier = nn.Sequential(
             nn.Linear(d_model, d_model // 2),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model // 2, num_classes)
         )
-        
+
         # 初始化参数
         self._init_weights()
     
     def _init_weights(self):
-        """初始化模型参数"""
-        for module in self.modules():
+        """初始化模型参数 - 使用更稳定的初始化"""
+        for name, module in self.named_modules():
             if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
+                # 分类器使用更小的初始化
+                if 'classifier' in name:
+                    nn.init.xavier_uniform_(module.weight, gain=0.1)
+                else:
+                    nn.init.xavier_uniform_(module.weight, gain=0.5)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
-                nn.init.normal_(module.weight, mean=0, std=0.02)
+                # 降低embedding初始化标准差
+                nn.init.normal_(module.weight, mean=0, std=0.01)
                 if module.padding_idx is not None:
                     module.weight.data[module.padding_idx].zero_()
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
     
     def forward(self, input_ids, attention_mask=None, return_attention=False):
         """
@@ -289,7 +300,10 @@ class SentimentTransformer(nn.Module):
             x = (x * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
         else:
             x = x.mean(dim=1)
-        
+
+        # 池化后的LayerNorm，稳定分类器输入
+        x = self.pool_norm(x)
+
         # 分类
         logits = self.classifier(x)
         
