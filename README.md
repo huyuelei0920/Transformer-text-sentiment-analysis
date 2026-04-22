@@ -1,5 +1,6 @@
-<<<<<<< HEAD
 # 基于Transformer的文本情感分析系统设计与实现
+
+Design and implementation of a Transformer-based text sentiment analysis system for my thesis project.
 
 ## 项目简介
 
@@ -64,17 +65,17 @@ python inference.py --interactive
 ```
 ├── transformer_model.py      # Transformer 模型架构
 ├── tokenizer.py              # 中文分词器和数据处理
-├── train_transformer.py      # 训练脚本
+├── train_transformer_web.py  # 训练脚本
 ├── inference.py              # 模型推理接口
-├── app_transformer.py        # Streamlit Web 应用
-├── 启动界面.bat               # Windows 启动脚本
+├── app_transformer_web.py    # Streamlit Web 应用
 ├── 使用说明.md                # 详细使用说明
-├── data.csv                  # 训练数据
+├── train.csv                 # 训练数据
+├── validation.csv            # 验证数据
 ├── transformer_checkpoints/  # 模型保存目录
 │   ├── best_model.pt        # 最佳模型权重
 │   ├── tokenizer.pkl        # 分词器
 │   └── config.json          # 配置文件
-└── training_dir/            # BERT模型（用于对比）
+└── transformer_checkpoints_jieba/  # 结巴分词版本模型
 ```
 
 ## 技术栈
@@ -145,7 +146,3 @@ MIT License
 ## 致谢
 
 - Transformer架构参考: "Attention Is All You Need" (Vaswani et al., 2017)
-=======
-# Transformer-text-sentiment-analysis
-Design and implementation of a Transformer-based text sentiment analysis system for my thesis project
->>>>>>> 4eddb2608b927bc8ebfba192c0c0726e427aa013

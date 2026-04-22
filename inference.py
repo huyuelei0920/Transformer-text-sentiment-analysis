@@ -108,17 +108,6 @@ class SentimentPredictor:
     def _load_model(self) -> torch.nn.Module:
         """加载模型"""
         max_len = self.config.get('max_len', self.config.get('max_length', 128))
-        model_config = {
-            'd_model': self.config.get('d_model', 256),
-            'num_heads': self.config.get('num_heads', 8),
-            'num_layers': self.config.get('num_layers', 4),
-            'd_ff': self.config.get('d_ff', 512),
-            'dropout': self.config.get('dropout', 0.15),
-            'max_len': max_len,
-            'pad_idx': 0,
-        }
-
-        print(f"使用的模型配置: {model_config}")
 
         # 加载权重
         model_path = os.path.join(self.model_dir, self.model_file)
@@ -127,10 +116,54 @@ class SentimentPredictor:
             raise FileNotFoundError(f"模型文件未找到: {model_path}")
 
         checkpoint = torch.load(model_path, map_location=self.device)
+        model_state = checkpoint['model_state_dict']
+
+        # 从 checkpoint 权重中推断真实的模型结构参数，避免 config.json 不一致
+        real_d_model = model_state['embedding.weight'].shape[1]
+
+        # 推断 num_layers：统计 encoder.layers.X 的层数
+        layer_indices = set()
+        for k in model_state:
+            if k.startswith('encoder.layers.'):
+                layer_indices.add(int(k.split('.')[2]))
+        real_num_layers = len(layer_indices)
+
+        # 推断 d_ff：从 feed_forward.linear1.weight 的输出维度
+        ff_key = 'encoder.layers.0.feed_forward.linear1.weight'
+        real_d_ff = model_state[ff_key].shape[0] if ff_key in model_state else self.config.get('d_ff', 512)
+
+        # num_heads 无法从权重推断，保持 config 中的值，但要确保能整除 d_model
+        num_heads = self.config.get('num_heads', 8)
+        if real_d_model % num_heads != 0:
+            # 尝试常见的 num_heads 值
+            for nh in [2, 4, 8]:
+                if real_d_model % nh == 0:
+                    num_heads = nh
+                    break
+
+        if log_changes := (real_d_model != self.config.get('d_model', 256)
+                           or real_num_layers != self.config.get('num_layers', 4)
+                           or real_d_ff != self.config.get('d_ff', 512)):
+            print(f"WARNING: config.json params differ from actual weights, using weight values:")
+            print(f"  d_model: {self.config.get('d_model')} -> {real_d_model}")
+            print(f"  num_layers: {self.config.get('num_layers')} -> {real_num_layers}")
+            print(f"  d_ff: {self.config.get('d_ff')} -> {real_d_ff}")
 
         # 优先使用checkpoint中的vocab_size
         vocab_size = checkpoint.get('vocab_size', self.tokenizer.vocab_size)
         print(f"使用vocab_size: {vocab_size} (来源: {'checkpoint' if 'vocab_size' in checkpoint else 'tokenizer'})")
+
+        model_config = {
+            'd_model': real_d_model,
+            'num_heads': num_heads,
+            'num_layers': real_num_layers,
+            'd_ff': real_d_ff,
+            'dropout': self.config.get('dropout', 0.15),
+            'max_len': max_len,
+            'pad_idx': 0,
+        }
+
+        print(f"使用的模型配置: {model_config}")
 
         model = create_model(
             vocab_size=vocab_size,
@@ -139,7 +172,6 @@ class SentimentPredictor:
         )
 
         # 兼容性处理：旧模型没有pool_norm参数
-        model_state = checkpoint['model_state_dict']
         model_state_keys = set(model_state.keys())
         model_keys = set(model.state_dict().keys())
 

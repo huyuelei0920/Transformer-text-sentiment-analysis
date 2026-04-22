@@ -1,12 +1,12 @@
 """
 纯 Transformer 情感分析模型训练脚本
-彻底解决梯度爆炸和模型不稳定问题
 """
 import json
 import os
+import random
 import re
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Callable, Dict, Optional
 
 import torch
@@ -89,8 +89,8 @@ class StreamlitTrainer:
 
             loss.backward()
 
-            # 非常严格的梯度裁剪
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.2)
+            # 梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
             self.optimizer.step()
 
@@ -225,6 +225,38 @@ class StreamlitTrainer:
         }
 
 
+# 下采样平衡数据
+def balance_by_downsampling(texts, labels, seed=42):
+    """对多数类下采样，使各类样本数等于非最大类中的最大值"""
+    rng = random.Random(seed)
+
+    groups = defaultdict(list)
+    for text, label in zip(texts, labels):
+        groups[label].append((text, label))
+
+    counts = {k: len(v) for k, v in groups.items()}
+    max_count = max(counts.values())
+    # 目标数量 = 非最大类中的最大值
+    non_max = [c for c in counts.values() if c < max_count]
+    target = max(non_max) if non_max else max_count
+
+    balanced = []
+    for label, items in groups.items():
+        if len(items) > target:
+            sampled = rng.sample(items, target)
+        else:
+            sampled = list(items)
+        balanced.extend(sampled)
+
+    rng.shuffle(balanced)
+    texts_out = [t for t, _ in balanced]
+    labels_out = [l for _, l in balanced]
+
+    new_counts = Counter(labels_out)
+    print(f"下采样: {dict(counts)} -> {dict(new_counts)}，共 {len(texts_out)} 条")
+    return texts_out, labels_out
+
+
 # 标签标准化
 def normalize_labels(labels):
     label_map_text = {
@@ -301,6 +333,17 @@ def run_training(
     train_labels = normalize_labels(train_labels)
     val_labels = normalize_labels(val_labels)
 
+    # 下采样平衡数据
+    if config.get('balance_method', 'downsample') == 'downsample':
+        if log_callback:
+            log_callback(f"下采样前训练集: {len(train_texts)} 条，{dict(Counter(train_labels))}")
+            log_callback(f"下采样前验证集: {len(val_texts)} 条，{dict(Counter(val_labels))}")
+        train_texts, train_labels = balance_by_downsampling(train_texts, train_labels)
+        val_texts, val_labels = balance_by_downsampling(val_texts, val_labels)
+        if log_callback:
+            log_callback(f"下采样后训练集: {len(train_texts)} 条")
+            log_callback(f"下采样后验证集: {len(val_texts)} 条")
+
     tokenizer = ChineseTokenizer(
         max_vocab_size=config['max_vocab_size'],
         use_word=config['use_word'],
@@ -333,14 +376,14 @@ def run_training(
         num_workers=0,
     )
 
-    # 使用极简模型配置
+    # 模型配置（优先从 config 读取，否则用默认值）
     model_config = {
-        'd_model': 128,
-        'num_heads': 2,
-        'num_layers': 2,
-        'd_ff': 256,
-        'dropout': 0.1,
-        'max_len': config['max_length'],
+        'd_model': config.get('d_model', 256),
+        'num_heads': config.get('num_heads', 8),
+        'num_layers': config.get('num_layers', 4),
+        'd_ff': config.get('d_ff', 512),
+        'dropout': config.get('dropout', 0.2),
+        'max_len': config.get('max_length', 128),
     }
 
     model = create_model(
@@ -363,8 +406,8 @@ def run_training(
         patience=3
     )
 
-    # 标准交叉熵损失
-    criterion = nn.CrossEntropyLoss()
+    # 标签平滑交叉熵损失，防止过拟合
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     trainer = StreamlitTrainer(
         model=model,

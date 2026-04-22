@@ -264,7 +264,7 @@ class SentimentTransformer(nn.Module):
                     nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 # 降低embedding初始化标准差
-                nn.init.normal_(module.weight, mean=0, std=0.01)
+                nn.init.normal_(module.weight, mean=0, std=0.05)
                 if module.padding_idx is not None:
                     module.weight.data[module.padding_idx].zero_()
             elif isinstance(module, nn.LayerNorm):
